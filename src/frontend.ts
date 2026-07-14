@@ -32,6 +32,14 @@ type NotesIndex = {
   notes: NoteSummary[]
 }
 
+type NotesExport = {
+  kind: 'lilypad-notes-export'
+  version: 1
+  exportedAt: number
+  index: NotesIndex
+  notes: Note[]
+}
+
 type BackendMessage =
   | {
       type: 'ui:openNotesModal'
@@ -44,6 +52,8 @@ type BackendMessage =
   | { type: 'notes:deleted'; id: string }
   | { type: 'folders:saved'; index: NotesIndex }
   | { type: 'folders:deleted'; id: string; index: NotesIndex }
+  | { type: 'export:all'; payload: NotesExport }
+  | { type: 'import:complete'; imported: number; index: NotesIndex }
   | { type: 'context:activeChat'; chatId: string | null; chatName?: string }
   | { type: 'error'; message: string }
 
@@ -257,6 +267,37 @@ function formatDate(timestamp: number) {
     hour: 'numeric',
     minute: '2-digit',
   })
+}
+
+function exportFilename(exportedAt: number) {
+  const stamp = new Date(exportedAt).toISOString().replace(/[:.]/g, '-')
+  return `lilypad-notes-${stamp}.json`
+}
+
+function downloadJson(payload: NotesExport) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: 'application/json',
+  })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+
+  anchor.href = url
+  anchor.download = exportFilename(payload.exportedAt)
+  anchor.rel = 'noreferrer'
+  document.body.append(anchor)
+  anchor.click()
+  anchor.remove()
+
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+async function readImportFile(file: File): Promise<NotesExport> {
+  const text = await file.text()
+  const payload = JSON.parse(text)
+  if (payload?.kind !== 'lilypad-notes-export' || !Array.isArray(payload?.notes)) {
+    throw new Error('That file is not a Lilypad notes export.')
+  }
+  return payload
 }
 
 function sortFolders(folders: Folder[]) {
@@ -731,6 +772,8 @@ export function setup(ctx: any) {
         .lp-folder-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 2px; }
         .lp-folder-action { padding: 6px 8px; font-size: 12px; }
         .lp-folder-action:disabled { cursor: not-allowed; opacity: .45; }
+        .lp-data-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 12px 0 8px; }
+        .lp-data-action { border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); border-radius: 8px; cursor: pointer; padding: 7px 8px; font-size: 12px; }
         .lp-search, .lp-title-input, .lp-meta-grid input, .lp-meta-grid select, .lp-body-label textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
         .lp-search { padding: 8px; margin-bottom: 10px; }
         .lp-note-list { height: calc(100% - 46px); overflow: auto; padding-right: 2px; }
@@ -796,6 +839,11 @@ export function setup(ctx: any) {
             <button class="lp-folder-action" data-lilypad-folder-rename disabled>Rename</button>
             <button class="lp-folder-action" data-lilypad-folder-delete disabled>Delete</button>
           </div>
+          <div class="lp-data-actions">
+            <button class="lp-data-action" data-lilypad-export>Export</button>
+            <button class="lp-data-action" data-lilypad-import>Import</button>
+          </div>
+          <input data-lilypad-import-file type="file" accept="application/json,.json" hidden />
           <span class="lp-chat-context" data-lilypad-chat-context>This Chat: checking...</span>
           <div class="lp-footer">
             <span class="lp-status" data-lilypad-status>Ready</span>
@@ -841,6 +889,34 @@ export function setup(ctx: any) {
       if (!window.confirm(`Delete folder "${selected.name}"? Notes inside it will be kept and moved to No Folder.`)) return
       setStatus('Deleting folder...')
       ctx.sendToBackend({ type: 'folders:delete', id: selected.id })
+    })
+
+    activeRoot.querySelector<HTMLButtonElement>('[data-lilypad-export]')?.addEventListener('click', () => {
+      setStatus('Exporting...')
+      ctx.sendToBackend({ type: 'export:all' })
+    })
+
+    const importFile = activeRoot.querySelector<HTMLInputElement>('[data-lilypad-import-file]')
+    activeRoot.querySelector<HTMLButtonElement>('[data-lilypad-import]')?.addEventListener('click', () => {
+      importFile?.click()
+    })
+
+    importFile?.addEventListener('change', async () => {
+      const file = importFile.files?.[0]
+      importFile.value = ''
+      if (!file) return
+
+      try {
+        const payload = await readImportFile(file)
+        if (!window.confirm(`Import ${payload.notes.length} notes? This replaces the current Lilypad library.`)) return
+        setStatus('Importing...')
+        ctx.sendToBackend({ type: 'import:all', payload })
+      } catch (error: any) {
+        const message = error?.message ?? 'Import failed.'
+        console.error('[Lilypad]', message)
+        window.alert(message)
+        setStatus(message)
+      }
     })
 
     activeRoot.querySelectorAll<HTMLButtonElement>('[data-folder-filter]').forEach((button) => {
@@ -993,6 +1069,25 @@ export function setup(ctx: any) {
       refreshFolderSelect()
       renderList()
       setStatus('Folder deleted')
+      return
+    }
+
+    if (payload.type === 'export:all') {
+      downloadJson(payload.payload)
+      setStatus(`Exported ${payload.payload.notes.length} note${payload.payload.notes.length === 1 ? '' : 's'}`)
+      return
+    }
+
+    if (payload.type === 'import:complete') {
+      index = payload.index
+      selectedNote = null
+      dirty = false
+      folderFilter = 'all'
+      selectedFolderId = null
+      renderFolders()
+      renderList()
+      renderEditor()
+      setStatus(`Imported ${payload.imported} note${payload.imported === 1 ? '' : 's'}`)
       return
     }
 
