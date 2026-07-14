@@ -436,7 +436,6 @@ export function setup(ctx: any) {
   let folderFilter: FolderFilter = 'all'
   let selectedFolderId: string | null = null
   let activeChat: ChatContext = { chatId: null }
-  let markdownMode: 'write' | 'preview' | 'split' = 'preview'
   let noteListCollapsed = false
   let pendingEditorRequest: { requestId: string; target: 'body' } | null = null
   let query = ''
@@ -734,15 +733,10 @@ export function setup(ctx: any) {
         <span>Markdown</span>
         <div class="lp-markdown-actions">
           <button class="lp-expand-text" data-lilypad-expand-body type="button">Edit Raw</button>
-          <div class="lp-mode-tabs" role="group" aria-label="Markdown view mode">
-            <button class="${markdownMode === 'write' ? 'is-active' : ''}" data-markdown-mode="write">Write</button>
-            <button class="${markdownMode === 'preview' ? 'is-active' : ''}" data-markdown-mode="preview">Live</button>
-            <button class="${markdownMode === 'split' ? 'is-active' : ''}" data-markdown-mode="split">Split</button>
-          </div>
         </div>
       </div>
 
-      <div class="lp-body-grid is-${markdownMode}">
+      <div class="lp-body-grid">
         <label class="lp-body-label">
           <textarea data-lilypad-body>${escapeHtml(note.body)}</textarea>
         </label>
@@ -754,7 +748,6 @@ export function setup(ctx: any) {
 
     const body = editor.querySelector<HTMLTextAreaElement>('[data-lilypad-body]')
     const preview = editor.querySelector<HTMLElement>('[data-lilypad-preview]')
-    const bodyGrid = editor.querySelector<HTMLElement>('.lp-body-grid')
     const scopeSelect = editor.querySelector<HTMLSelectElement>('[data-lilypad-scope]')
     const chatHint = editor.querySelector<HTMLElement>('[data-lilypad-chat-hint]')
     const markDirty = () => {
@@ -778,19 +771,6 @@ export function setup(ctx: any) {
         body?.value ?? '',
         'Write your note...',
       )
-    })
-
-    editor.querySelectorAll<HTMLButtonElement>('[data-markdown-mode]').forEach((button) => {
-      button.addEventListener('click', () => {
-        markdownMode = (button.dataset.markdownMode as 'write' | 'preview' | 'split') ?? 'write'
-        editor.querySelectorAll('[data-markdown-mode]').forEach((item) => item.classList.remove('is-active'))
-        button.classList.add('is-active')
-        if (bodyGrid) {
-          bodyGrid.classList.remove('is-write', 'is-preview', 'is-split')
-          bodyGrid.classList.add(`is-${markdownMode}`)
-        }
-        if (preview && body) preview.innerHTML = renderMarkdown(body.value)
-      })
     })
 
     scopeSelect?.addEventListener('change', () => {
@@ -882,14 +862,7 @@ export function setup(ctx: any) {
         .lp-markdown-actions { display: flex; align-items: center; gap: 6px; }
         .lp-expand-text { padding: 4px 7px; font-size: 12px; background: transparent; color: var(--lumiverse-text-dim); }
         .lp-expand-text:hover { color: var(--lumiverse-text); }
-        .lp-mode-tabs { display: inline-grid; grid-template-columns: repeat(3, auto); gap: 4px; }
-        .lp-mode-tabs button { border: 1px solid var(--lumiverse-border); background: transparent; color: var(--lumiverse-text-dim); border-radius: 7px; cursor: pointer; padding: 4px 7px; font-size: 12px; }
-        .lp-mode-tabs button.is-active { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
-        .lp-body-grid { min-height: 0; flex: 1; display: grid; gap: 10px; }
-        .lp-body-grid.is-write, .lp-body-grid.is-preview { grid-template-columns: minmax(0, 1fr); }
-        .lp-body-grid.is-split { grid-template-columns: minmax(0, 1fr) minmax(240px, .86fr); }
-        .lp-body-grid.is-write .lp-preview { display: none; }
-        .lp-body-grid.is-preview .lp-body-label { display: none; }
+        .lp-body-grid { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, .86fr); gap: 10px; }
         .lp-body-label { min-height: 0; display: flex; flex-direction: column; gap: 4px; }
         .lp-body-label textarea { flex: 1; resize: none; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.45; }
         .lp-preview { min-height: 0; overflow: auto; padding: 12px; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: transparent; line-height: 1.45; }
