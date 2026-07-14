@@ -101,6 +101,7 @@ function renderMarkdown(source) {
   let listType = null
   let paragraph = []
   let inCodeFence = false
+  let codeInfo = ''
   let codeLanguage = ''
   let codeLines = []
 
@@ -112,30 +113,34 @@ function renderMarkdown(source) {
 
   const flushCodeFence = () => {
     const languageClass = codeLanguage ? ` class="language-${escapeHtml(codeLanguage)}"` : ''
-    html.push(`<pre><code${languageClass}>${escapeHtml(codeLines.join('\n'))}</code></pre>`)
+    const label = codeInfo ? `<figcaption>${escapeHtml(codeInfo)}</figcaption>` : ''
+    html.push(`<figure class="lp-code-block">${label}<pre><code${languageClass}>${escapeHtml(codeLines.join('\n'))}</code></pre></figure>`)
     inCodeFence = false
+    codeInfo = ''
     codeLanguage = ''
     codeLines = []
   }
 
   for (const line of lines) {
     const trimmed = line.trim()
-    const fence = trimmed.match(/^```([A-Za-z0-9_-]+)?\s*$/)
 
-    if (fence) {
-      flushParagraph()
-      listType = closeList(html, listType)
-      if (inCodeFence) {
+    if (inCodeFence) {
+      if (/^```\s*$/.test(trimmed)) {
         flushCodeFence()
       } else {
-        inCodeFence = true
-        codeLanguage = fence[1] ?? ''
+        codeLines.push(line)
       }
       continue
     }
 
-    if (inCodeFence) {
-      codeLines.push(line)
+    const fence = trimmed.match(/^```(.*)$/)
+    if (fence) {
+      flushParagraph()
+      listType = closeList(html, listType)
+      inCodeFence = true
+      codeInfo = fence[1]?.trim() ?? ''
+      const language = codeInfo.split(/\s+/)[0] ?? ''
+      codeLanguage = /^[A-Za-z0-9_-]+$/.test(language) ? language : ''
       continue
     }
 
@@ -160,7 +165,7 @@ function renderMarkdown(source) {
       continue
     }
 
-    const unordered = trimmed.match(/^[-*]\s+(.+)$/)
+    const unordered = trimmed.match(/^[-*+]\s+(.+)$/)
     const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/)
     if (unordered || ordered) {
       flushParagraph()
@@ -367,7 +372,7 @@ export function setup(ctx) {
   let folderFilter = 'all'
   let selectedFolderId = null
   let activeChat = { chatId: null }
-  let markdownMode = 'write'
+  let markdownMode = 'preview'
   let noteListCollapsed = false
   let pendingEditorRequest = null
   let query = ''
@@ -641,9 +646,6 @@ export function setup(ctx) {
             <option value="standalone" ${note.scope === 'standalone' ? 'selected' : ''}>Standalone</option>
             <option value="chat" ${note.scope === 'chat' ? 'selected' : ''}>Chat</option>
           </select>
-          <span class="lp-field-hint" data-lilypad-chat-hint>
-            ${note.scope === 'chat' ? escapeHtml(note.chatName ?? activeChat.chatName ?? 'Current chat') : 'Global note'}
-          </span>
         </label>
         <label>
           Folder
@@ -660,14 +662,17 @@ export function setup(ctx) {
           Pinned
         </label>
       </div>
+      <div class="lp-note-context" data-lilypad-chat-hint>
+        ${note.scope === 'chat' ? `Chat note: ${escapeHtml(note.chatName ?? activeChat.chatName ?? 'Current chat')}` : 'Global note'}
+      </div>
 
       <div class="lp-markdown-head">
         <span>Markdown</span>
         <div class="lp-markdown-actions">
-          <button class="lp-expand-text" data-lilypad-expand-body type="button">Expand</button>
+          <button class="lp-expand-text" data-lilypad-expand-body type="button">Edit Raw</button>
           <div class="lp-mode-tabs" role="group" aria-label="Markdown view mode">
             <button class="${markdownMode === 'write' ? 'is-active' : ''}" data-markdown-mode="write">Write</button>
-            <button class="${markdownMode === 'preview' ? 'is-active' : ''}" data-markdown-mode="preview">Preview</button>
+            <button class="${markdownMode === 'preview' ? 'is-active' : ''}" data-markdown-mode="preview">Live</button>
             <button class="${markdownMode === 'split' ? 'is-active' : ''}" data-markdown-mode="split">Split</button>
           </div>
         </div>
@@ -677,7 +682,7 @@ export function setup(ctx) {
         <label class="lp-body-label">
           <textarea data-lilypad-body>${escapeHtml(note.body)}</textarea>
         </label>
-        <section class="lp-preview" data-lilypad-preview aria-label="Markdown preview">
+        <section class="lp-preview" data-lilypad-preview aria-label="Live markdown view">
           ${renderMarkdown(note.body)}
         </section>
       </div>
@@ -728,7 +733,7 @@ export function setup(ctx) {
       if (!chatHint) return
       chatHint.textContent =
         scopeSelect.value === 'chat'
-          ? activeChat.chatName ?? selectedNote?.chatName ?? 'Current chat'
+          ? `Chat note: ${activeChat.chatName ?? selectedNote?.chatName ?? 'Current chat'}`
           : 'Global note'
     })
 
@@ -794,7 +799,7 @@ export function setup(ctx) {
         .lp-note-card { display: block; width: 100%; padding: 10px; margin-bottom: 8px; text-align: left; }
         .lp-note-title, .lp-note-meta, .lp-note-tags { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .lp-note-title { font-weight: 700; }
-        .lp-note-meta, .lp-note-tags, .lp-status, .lp-chat-context, .lp-field-hint, .lp-empty span { color: var(--lumiverse-text-dim); font-size: 12px; margin-top: 4px; }
+        .lp-note-meta, .lp-note-tags, .lp-status, .lp-chat-context, .lp-field-hint, .lp-note-context, .lp-empty span { color: var(--lumiverse-text-dim); font-size: 12px; margin-top: 4px; }
         .lp-chat-context { display: block; margin: 4px 0 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .lp-empty { padding: 12px; border: 1px dashed var(--lumiverse-border); border-radius: 8px; }
         .lp-empty strong, .lp-empty span { display: block; }
@@ -803,11 +808,12 @@ export function setup(ctx) {
         .lp-title-input { padding: 9px 10px; font-weight: 700; }
         .lp-actions { display: flex; gap: 8px; }
         .lp-actions button { padding: 8px 10px; }
-        .lp-meta-grid { display: grid; grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1.2fr) 82px; gap: 8px; align-items: end; }
+        .lp-meta-grid { display: grid; grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1.2fr) 82px; gap: 8px; align-items: start; }
         .lp-meta-grid label, .lp-body-label { color: var(--lumiverse-text-dim); font-size: 12px; }
         .lp-meta-grid input, .lp-meta-grid select { display: block; margin-top: 4px; padding: 7px 8px; }
         .lp-field-hint { display: block; min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .lp-check { display: flex; align-items: center; gap: 6px; min-height: 34px; }
+        .lp-note-context { min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .lp-check { display: flex; align-items: center; gap: 6px; min-height: 34px; margin-top: 18px; }
         .lp-markdown-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--lumiverse-text-dim); font-size: 12px; }
         .lp-markdown-actions { display: flex; align-items: center; gap: 6px; }
         .lp-expand-text { padding: 4px 7px; font-size: 12px; background: transparent; color: var(--lumiverse-text-dim); }
@@ -823,12 +829,19 @@ export function setup(ctx) {
         .lp-body-label { min-height: 0; display: flex; flex-direction: column; gap: 4px; }
         .lp-body-label textarea { flex: 1; resize: none; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.45; }
         .lp-preview { min-height: 0; overflow: auto; padding: 12px; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: transparent; line-height: 1.45; }
+        .lp-preview:empty::before { content: "No markdown yet."; color: var(--lumiverse-text-dim); }
         .lp-preview h1, .lp-preview h2, .lp-preview h3, .lp-preview h4, .lp-preview h5, .lp-preview h6 { margin: 0 0 8px; }
         .lp-preview p { margin: 0 0 8px; }
-        .lp-preview ul, .lp-preview ol { margin: 0 0 10px 18px; padding: 0; }
+        .lp-preview ul, .lp-preview ol { margin: 0 0 10px 22px; padding: 0; }
+        .lp-preview ul { list-style: disc outside; }
+        .lp-preview ol { list-style: decimal outside; }
         .lp-preview li { margin: 3px 0; }
+        .lp-preview li::marker { color: var(--lumiverse-text-dim); }
         .lp-preview blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 3px solid var(--lumiverse-border); color: var(--lumiverse-text-dim); }
+        .lp-code-block { margin: 0 0 10px; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill); overflow: hidden; }
+        .lp-code-block figcaption { padding: 6px 10px; border-bottom: 1px solid var(--lumiverse-border); color: var(--lumiverse-text-dim); font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
         .lp-preview pre { margin: 0 0 10px; padding: 10px; overflow: auto; border-radius: 8px; background: var(--lumiverse-fill); }
+        .lp-code-block pre { margin: 0; border-radius: 0; background: transparent; }
         .lp-preview code { padding: 1px 4px; border-radius: 4px; background: var(--lumiverse-fill); }
         .lp-preview pre code { padding: 0; background: transparent; }
         .lp-preview a { color: var(--lumiverse-accent, currentColor); text-decoration: underline; text-underline-offset: 2px; }
@@ -842,6 +855,7 @@ export function setup(ctx) {
           .lp-sidebar, .lp-list-pane { border-right: 0; border-bottom: 1px solid var(--lumiverse-border); padding-right: 0; padding-bottom: 10px; }
           .lp-note-list { max-height: 210px; }
           .lp-meta-grid, .lp-body-grid, .lp-editor-head { grid-template-columns: 1fr; }
+          .lp-check { margin-top: 0; }
           .lp-actions { justify-content: stretch; }
           .lp-actions button { flex: 1; }
           .lp-body-label textarea { min-height: 220px; }
