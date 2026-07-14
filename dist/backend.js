@@ -426,10 +426,10 @@ async function importAll(payload, userId) {
 
 async function listNotes(
   userId,
-  scope = 'all',
+  scope= 'all',
   query = '',
   chatId,
-  folderFilter = 'all',
+  folderFilter= 'all',
   folderId,
 ) {
   const index = await loadIndex(userId)
@@ -626,6 +626,25 @@ spindle.onFrontendMessage(async (payload, userId) => {
         const { index, imported } = await importAll(payload.payload, userId)
         sendToUser({ type: 'import:complete', imported, index }, userId)
         sendToUser({ type: 'notes:index', index }, userId)
+        break
+      }
+
+      case 'editor:open': {
+        const result = await spindle.textEditor.open({
+          title: normalizeText(payload.title, 'Edit Text'),
+          value: typeof payload.value === 'string' ? payload.value : '',
+          placeholder: typeof payload.placeholder === 'string' ? payload.placeholder : '',
+          userId,
+        })
+        sendToUser(
+          {
+            type: 'editor:result',
+            requestId: payload.requestId,
+            text: result.text,
+            cancelled: Boolean(result.cancelled),
+          },
+          userId,
+        )
         break
       }
 

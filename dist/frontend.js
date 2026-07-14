@@ -368,9 +368,17 @@ export function setup(ctx) {
   let selectedFolderId = null
   let activeChat = { chatId: null }
   let markdownMode = 'write'
+  let noteListCollapsed = false
+  let pendingEditorRequest = null
   let query = ''
   let dirty = false
   let listTimer
+
+  function createRequestId(prefix = 'request') {
+    const uuid = globalThis.crypto?.randomUUID?.()
+    if (uuid) return `${prefix}_${uuid.replaceAll('-', '')}`
+    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+  }
 
   function sendListRequest() {
     ctx.sendToBackend({
@@ -391,6 +399,25 @@ export function setup(ctx) {
   function setStatus(message) {
     const status = activeRoot?.querySelector('[data-lilypad-status]')
     if (status) status.textContent = message
+  }
+
+  function setNoteListCollapsed(collapsed) {
+    noteListCollapsed = collapsed
+    const shell = activeRoot?.querySelector('.lp-shell')
+    shell?.classList.toggle('is-list-collapsed', noteListCollapsed)
+  }
+
+  function openExpandedTextEditor(target, title, value, placeholder = '') {
+    const requestId = createRequestId('editor')
+    pendingEditorRequest = { requestId, target }
+    setStatus('Opening expanded editor...')
+    ctx.sendToBackend({
+      type: 'editor:open',
+      requestId,
+      title,
+      value,
+      placeholder,
+    })
   }
 
   function renderChatContext() {
@@ -508,6 +535,8 @@ export function setup(ctx) {
   function renderList() {
     const list = activeRoot?.querySelector('[data-lilypad-note-list]')
     if (!list) return
+    const noteCount = activeRoot?.querySelector('[data-lilypad-note-count]')
+    if (noteCount) noteCount.textContent = String(index.notes.length)
 
     if (!index.notes.length) {
       list.innerHTML = `
@@ -542,6 +571,7 @@ export function setup(ctx) {
         if (dirty && !window.confirm('Discard unsaved changes?')) return
         const id = button.dataset.noteId
         if (!id) return
+        setNoteListCollapsed(true)
         setStatus('Loading note...')
         ctx.sendToBackend({ type: 'notes:get', id })
       })
@@ -633,10 +663,13 @@ export function setup(ctx) {
 
       <div class="lp-markdown-head">
         <span>Markdown</span>
-        <div class="lp-mode-tabs" role="group" aria-label="Markdown view mode">
-          <button class="${markdownMode === 'write' ? 'is-active' : ''}" data-markdown-mode="write">Write</button>
-          <button class="${markdownMode === 'preview' ? 'is-active' : ''}" data-markdown-mode="preview">Preview</button>
-          <button class="${markdownMode === 'split' ? 'is-active' : ''}" data-markdown-mode="split">Split</button>
+        <div class="lp-markdown-actions">
+          <button class="lp-expand-text" data-lilypad-expand-body type="button">Expand</button>
+          <div class="lp-mode-tabs" role="group" aria-label="Markdown view mode">
+            <button class="${markdownMode === 'write' ? 'is-active' : ''}" data-markdown-mode="write">Write</button>
+            <button class="${markdownMode === 'preview' ? 'is-active' : ''}" data-markdown-mode="preview">Preview</button>
+            <button class="${markdownMode === 'split' ? 'is-active' : ''}" data-markdown-mode="split">Split</button>
+          </div>
         </div>
       </div>
 
@@ -669,9 +702,18 @@ export function setup(ctx) {
       if (preview) preview.innerHTML = renderMarkdown(body.value)
     })
 
+    editor.querySelector('[data-lilypad-expand-body]')?.addEventListener('click', () => {
+      openExpandedTextEditor(
+        'body',
+        selectedNote?.title ? `Edit ${selectedNote.title}` : 'Edit Note Body',
+        body?.value ?? '',
+        'Write your note...',
+      )
+    })
+
     editor.querySelectorAll('[data-markdown-mode]').forEach((button) => {
       button.addEventListener('click', () => {
-        markdownMode = button.dataset.markdownMode ?? 'write'
+        markdownMode = (button.dataset.markdownMode) ?? 'write'
         editor.querySelectorAll('[data-markdown-mode]').forEach((item) => item.classList.remove('is-active'))
         button.classList.add('is-active')
         if (bodyGrid) {
@@ -719,11 +761,13 @@ export function setup(ctx) {
 
     activeRoot.innerHTML = `
       <style>
-        .lp-shell { display: grid; grid-template-columns: 172px 260px minmax(320px, 1fr); gap: 12px; height: min(680px, 76vh); box-sizing: border-box; color: var(--lumiverse-text); }
+        .lp-shell { display: grid; grid-template-columns: 172px 260px minmax(320px, 1fr); gap: 12px; height: min(680px, 76vh); box-sizing: border-box; color: var(--lumiverse-text); transition: grid-template-columns .18s ease; }
+        .lp-shell.is-list-collapsed { grid-template-columns: 172px 46px minmax(360px, 1fr); }
         .lp-pane { min-width: 0; overflow: hidden; }
         .lp-sidebar, .lp-list-pane { border-right: 1px solid var(--lumiverse-border); padding-right: 12px; }
+        .lp-list-pane { position: relative; }
         .lp-heading { font-weight: 700; margin-bottom: 8px; }
-        .lp-filter, .lp-folder, .lp-folder-action, .lp-folder-add, .lp-note-card, .lp-primary, .lp-actions button, .lp-new { border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); border-radius: 8px; cursor: pointer; }
+        .lp-filter, .lp-folder, .lp-folder-action, .lp-folder-add, .lp-note-card, .lp-primary, .lp-actions button, .lp-new, .lp-list-toggle, .lp-list-collapsed, .lp-expand-text { border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); border-radius: 8px; cursor: pointer; }
         .lp-new { width: 100%; padding: 8px 10px; margin-bottom: 10px; text-align: left; }
         .lp-filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px; }
         .lp-filter { padding: 6px 7px; text-align: center; font-size: 12px; }
@@ -738,8 +782,15 @@ export function setup(ctx) {
         .lp-data-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 0 0 8px; }
         .lp-data-action { border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); border-radius: 8px; cursor: pointer; padding: 7px 8px; font-size: 12px; }
         .lp-search, .lp-title-input, .lp-meta-grid input, .lp-meta-grid select, .lp-body-label textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
-        .lp-search { padding: 8px; margin-bottom: 10px; }
-        .lp-note-list { height: calc(100% - 46px); overflow: auto; padding-right: 2px; }
+        .lp-list-tools { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 6px; margin-bottom: 10px; }
+        .lp-search { padding: 8px; }
+        .lp-list-toggle { padding: 0; font-size: 18px; line-height: 1; }
+        .lp-list-collapsed { display: none; width: 100%; height: 100%; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--lumiverse-text-dim); font-size: 12px; }
+        .lp-list-collapsed span { writing-mode: vertical-rl; text-orientation: mixed; }
+        .lp-list-collapsed strong { color: var(--lumiverse-text); font-size: 13px; }
+        .lp-shell.is-list-collapsed .lp-list-expanded { display: none; }
+        .lp-shell.is-list-collapsed .lp-list-collapsed { display: flex; }
+        .lp-note-list { height: calc(100% - 48px); overflow: auto; padding-right: 2px; }
         .lp-note-card { display: block; width: 100%; padding: 10px; margin-bottom: 8px; text-align: left; }
         .lp-note-title, .lp-note-meta, .lp-note-tags { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .lp-note-title { font-weight: 700; }
@@ -758,6 +809,9 @@ export function setup(ctx) {
         .lp-field-hint { display: block; min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .lp-check { display: flex; align-items: center; gap: 6px; min-height: 34px; }
         .lp-markdown-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--lumiverse-text-dim); font-size: 12px; }
+        .lp-markdown-actions { display: flex; align-items: center; gap: 6px; }
+        .lp-expand-text { padding: 4px 7px; font-size: 12px; background: transparent; color: var(--lumiverse-text-dim); }
+        .lp-expand-text:hover { color: var(--lumiverse-text); }
         .lp-mode-tabs { display: inline-grid; grid-template-columns: repeat(3, auto); gap: 4px; }
         .lp-mode-tabs button { border: 1px solid var(--lumiverse-border); background: transparent; color: var(--lumiverse-text-dim); border-radius: 7px; cursor: pointer; padding: 4px 7px; font-size: 12px; }
         .lp-mode-tabs button.is-active { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
@@ -782,7 +836,9 @@ export function setup(ctx) {
         .lp-preview hr { border: 0; border-top: 1px solid var(--lumiverse-border); margin: 12px 0; }
         .lp-footer { margin-top: 10px; display: flex; justify-content: space-between; gap: 8px; }
         @media (max-width: 760px) {
-          .lp-shell { grid-template-columns: 1fr; height: min(720px, 78vh); overflow: auto; }
+          .lp-shell, .lp-shell.is-list-collapsed { grid-template-columns: 1fr; height: min(720px, 78vh); overflow: auto; }
+          .lp-shell.is-list-collapsed .lp-list-expanded { display: block; }
+          .lp-shell.is-list-collapsed .lp-list-collapsed { display: none; }
           .lp-sidebar, .lp-list-pane { border-right: 0; border-bottom: 1px solid var(--lumiverse-border); padding-right: 0; padding-bottom: 10px; }
           .lp-note-list { max-height: 210px; }
           .lp-meta-grid, .lp-body-grid, .lp-editor-head { grid-template-columns: 1fr; }
@@ -826,20 +882,40 @@ export function setup(ctx) {
         </aside>
 
         <section class="lp-pane lp-list-pane">
-          <input class="lp-search" data-lilypad-search placeholder="Search title, body, or tags..." />
-          <div class="lp-note-list" data-lilypad-note-list></div>
+          <div class="lp-list-expanded">
+            <div class="lp-list-tools">
+              <input class="lp-search" data-lilypad-search placeholder="Search title, body, or tags..." />
+              <button class="lp-list-toggle" data-lilypad-list-collapse type="button" title="Collapse notes">‹</button>
+            </div>
+            <div class="lp-note-list" data-lilypad-note-list></div>
+          </div>
+          <button class="lp-list-collapsed" data-lilypad-list-expand type="button" title="Show notes">
+            <span>Notes</span>
+            <strong data-lilypad-note-count>${index.notes.length}</strong>
+          </button>
         </section>
 
         <main class="lp-pane lp-editor" data-lilypad-editor></main>
       </div>
     `
 
+    setNoteListCollapsed(noteListCollapsed)
+
     activeRoot.querySelector('[data-lilypad-new]')?.addEventListener('click', () => {
       if (dirty && !window.confirm('Discard unsaved changes?')) return
       selectedNote = createDraftNote()
+      setNoteListCollapsed(true)
       renderList()
       renderEditor()
       setStatus('New draft')
+    })
+
+    activeRoot.querySelector('[data-lilypad-list-collapse]')?.addEventListener('click', () => {
+      setNoteListCollapsed(true)
+    })
+
+    activeRoot.querySelector('[data-lilypad-list-expand]')?.addEventListener('click', () => {
+      setNoteListCollapsed(false)
     })
 
     activeRoot.querySelector('[data-lilypad-folder-add]')?.addEventListener('click', () => {
@@ -896,7 +972,7 @@ export function setup(ctx) {
 
     activeRoot.querySelectorAll('[data-folder-filter]').forEach((button) => {
       button.addEventListener('click', () => {
-        const nextFilter = button.dataset.folderFilter || 'all'
+        const nextFilter = (button.dataset.folderFilter) || 'all'
         const folderId = button.dataset.folderId ?? null
         selectFolder(nextFilter, folderId)
       })
@@ -904,7 +980,7 @@ export function setup(ctx) {
 
     activeRoot.querySelectorAll('[data-scope]').forEach((button) => {
       button.addEventListener('click', () => {
-        scope = button.dataset.scope || 'all'
+        scope = (button.dataset.scope) || 'all'
         activeRoot?.querySelectorAll('[data-scope]').forEach((item) => item.classList.remove('is-active'))
         button.classList.add('is-active')
         setStatus('Loading notes...')
@@ -913,7 +989,7 @@ export function setup(ctx) {
     })
 
     activeRoot.querySelector('[data-lilypad-search]')?.addEventListener('input', (event) => {
-      query = event.target.value
+      query = (event.target).value
       setStatus(query.trim() ? 'Searching...' : 'Loading notes...')
       queueListRequest()
     })
@@ -950,6 +1026,8 @@ export function setup(ctx) {
         activeNotesModal = null
         activeRoot = null
         selectedNote = null
+        pendingEditorRequest = null
+        noteListCollapsed = false
         dirty = false
       }
     })
@@ -989,6 +1067,29 @@ export function setup(ctx) {
         })
       }
       openNotesModal(payload.source ?? 'commandPalette')
+      return
+    }
+
+    if (payload.type === 'editor:result') {
+      if (!pendingEditorRequest || pendingEditorRequest.requestId !== payload.requestId) return
+      const target = pendingEditorRequest.target
+      pendingEditorRequest = null
+
+      if (payload.cancelled) {
+        setStatus('Editor cancelled')
+        return
+      }
+
+      if (target === 'body') {
+        const body = activeRoot?.querySelector('[data-lilypad-body]')
+        const preview = activeRoot?.querySelector('[data-lilypad-preview]')
+        if (body) {
+          body.value = payload.text
+          if (preview) preview.innerHTML = renderMarkdown(payload.text)
+          dirty = true
+          setStatus('Unsaved changes')
+        }
+      }
       return
     }
 
