@@ -307,6 +307,123 @@ async function deleteFolder(id, userId) {
   return index
 }
 
+async function exportAll(userId) {
+  const index = await loadIndex(userId)
+  const notes = []
+
+  for (const summary of index.notes) {
+    const note = await readNote(summary.id, userId)
+    if (note) notes.push(note)
+  }
+
+  return {
+    kind: 'lilypad-notes-export',
+    version: 1,
+    exportedAt: Date.now(),
+    index,
+    notes,
+  }
+}
+
+function normalizeFolderInput(folder, sort) {
+  const id = normalizeText(folder?.id)
+  const name = normalizeText(folder?.name)
+  if (!id || !name) return null
+
+  return {
+    id,
+    name,
+    parentId: normalizeNullableText(folder?.parentId),
+    sort: Number(folder?.sort ?? sort),
+  }
+}
+
+function normalizeImportedNote(raw) {
+  if (!raw || typeof raw !== 'object') return null
+
+  const id = normalizeText(raw.id)
+  if (!id) return null
+
+  const now = Date.now()
+  const scope = raw.scope === 'chat' ? 'chat' : 'standalone'
+
+  return {
+    id,
+    title: normalizeText(raw.title, 'Untitled note'),
+    body: typeof raw.body === 'string' ? raw.body : '',
+    folderId: normalizeNullableText(raw.folderId),
+    categoryId: normalizeNullableText(raw.categoryId),
+    tags: Array.isArray(raw.tags)
+      ? raw.tags.map((tag) => normalizeText(tag)).filter(Boolean).slice(0, 20)
+      : [],
+    scope,
+    chatId: scope === 'chat' ? normalizeText(raw.chatId) || undefined : undefined,
+    chatName: scope === 'chat' ? normalizeText(raw.chatName) || undefined : undefined,
+    pinned: Boolean(raw.pinned),
+    archived: Boolean(raw.archived),
+    createdAt: Number(raw.createdAt || now),
+    updatedAt: Number(raw.updatedAt || now),
+  }
+}
+
+function normalizeImportPayload(payload) {
+  if (!payload || payload.kind !== 'lilypad-notes-export' || !Array.isArray(payload.notes)) {
+    throw new Error('That file is not a Lilypad notes export.')
+  }
+
+  const folders = []
+  ;(Array.isArray(payload.index?.folders) ? payload.index.folders : []).forEach((folder, sort) => {
+    const normalized = normalizeFolderInput(folder, sort)
+    if (normalized) folders.push(normalized)
+  })
+
+  sortFolders(folders)
+  const folderIds = new Set(folders.map((folder) => folder.id))
+  const notes = []
+
+  payload.notes.forEach((rawNote) => {
+    const note = normalizeImportedNote(rawNote)
+    if (!note) return
+    notes.push({
+      ...note,
+      folderId: folderIds.has(note.folderId ?? '') ? note.folderId : null,
+    })
+  })
+
+  return {
+    index: {
+      version: 1,
+      folders,
+      categories: Array.isArray(payload.index?.categories) ? payload.index.categories : [],
+      notes: sortSummaries(notes.map(summarizeNote)),
+    },
+    notes,
+  }
+}
+
+async function importAll(payload, userId) {
+  const current = await loadIndex(userId)
+  const { index, notes } = normalizeImportPayload(payload)
+  const importedIds = new Set(notes.map((note) => note.id))
+
+  for (const summary of current.notes) {
+    if (!importedIds.has(summary.id)) {
+      try {
+        await spindle.userStorage.delete(notePath(summary.id), userId)
+      } catch {
+        // Missing old bodies are harmless during replace import.
+      }
+    }
+  }
+
+  for (const note of notes) {
+    await spindle.userStorage.setJson(notePath(note.id), note, { indent: 2, userId })
+  }
+
+  await saveIndex(index, userId)
+  return { index, imported: notes.length }
+}
+
 async function listNotes(
   userId,
   scope = 'all',
@@ -495,6 +612,19 @@ spindle.onFrontendMessage(async (payload, userId) => {
       case 'folders:delete': {
         const index = await deleteFolder(payload.id, userId)
         sendToUser({ type: 'folders:deleted', id: payload.id, index }, userId)
+        sendToUser({ type: 'notes:index', index }, userId)
+        break
+      }
+
+      case 'export:all': {
+        const payload = await exportAll(userId)
+        sendToUser({ type: 'export:all', payload }, userId)
+        break
+      }
+
+      case 'import:all': {
+        const { index, imported } = await importAll(payload.payload, userId)
+        sendToUser({ type: 'import:complete', imported, index }, userId)
         sendToUser({ type: 'notes:index', index }, userId)
         break
       }
