@@ -1,0 +1,9 @@
+{
+  "version": "0.1.0",
+  "name": "Lilypad",
+  "identifier": "lilypad",
+  "author": "KittyLotus",
+  "permissions": ["chats"],
+  "entry_backend": "dist/backend.js",
+  "entry_frontend": "dist/frontend.js"
+}
