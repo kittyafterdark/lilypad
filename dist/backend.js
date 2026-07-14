@@ -26,6 +26,12 @@ function createNoteId() {
   return `note_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
 }
 
+function createFolderId() {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  if (uuid) return `folder_${uuid.replaceAll('-', '')}`
+  return `folder_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+}
+
 function normalizeText(value, fallback = '') {
   const text = typeof value === 'string' ? value.trim() : ''
   return text || fallback
@@ -40,7 +46,18 @@ function normalizeIndex(raw) {
   const index = emptyIndex()
   if (!raw || typeof raw !== 'object') return index
 
-  index.folders = Array.isArray(raw.folders) ? raw.folders : []
+  index.folders = Array.isArray(raw.folders)
+    ? sortFolders(
+        raw.folders
+          .filter((folder) => folder?.id && folder?.name)
+          .map((folder, sort) => ({
+            id: normalizeText(folder.id),
+            name: normalizeText(folder.name, 'Untitled folder'),
+            parentId: normalizeNullableText(folder.parentId),
+            sort: Number(folder.sort ?? sort),
+          })),
+      )
+    : []
   index.categories = Array.isArray(raw.categories) ? raw.categories : []
   index.notes = Array.isArray(raw.notes) ? raw.notes : []
 
@@ -107,6 +124,13 @@ function sortSummaries(notes) {
   })
 }
 
+function sortFolders(folders) {
+  return folders.sort((a, b) => {
+    if (a.sort !== b.sort) return a.sort - b.sort
+    return a.name.localeCompare(b.name)
+  })
+}
+
 async function loadIndex(userId) {
   const raw = await spindle.userStorage.getJson(INDEX_PATH, {
     fallback: emptyIndex(),
@@ -169,6 +193,9 @@ async function saveNote(input, userId) {
 
   const note = normalizeNote(noteInput, existing)
   const index = await loadIndex(userId)
+  if (note.folderId && !index.folders.some((folder) => folder.id === note.folderId)) {
+    note.folderId = null
+  }
 
   await spindle.userStorage.setJson(notePath(note.id), note, { indent: 2, userId })
 
@@ -195,11 +222,98 @@ async function deleteNote(id, userId) {
   return index
 }
 
+async function createFolder(name, parentId, userId) {
+  const folderName = normalizeText(name, 'Untitled folder')
+  const index = await loadIndex(userId)
+  const nextSort = index.folders.reduce((max, folder) => Math.max(max, folder.sort), 0) + 1
+
+  index.folders = sortFolders([
+    ...index.folders,
+    {
+      id: createFolderId(),
+      name: folderName,
+      parentId: normalizeNullableText(parentId),
+      sort: nextSort,
+    },
+  ])
+
+  await saveIndex(index, userId)
+  return index
+}
+
+async function updateFolder(input, userId) {
+  const folderId = normalizeText(input.id)
+  const index = await loadIndex(userId)
+  const existing = index.folders.find((folder) => folder.id === folderId)
+  if (!existing) throw new Error('Folder not found.')
+
+  index.folders = sortFolders(
+    index.folders.map((folder) =>
+      folder.id === folderId
+        ? {
+            ...folder,
+            name: normalizeText(input.name, folder.name),
+            parentId: input.parentId === undefined ? folder.parentId : normalizeNullableText(input.parentId),
+            sort: Number(input.sort ?? folder.sort),
+          }
+        : folder,
+    ),
+  )
+
+  await saveIndex(index, userId)
+  return index
+}
+
+async function deleteFolder(id, userId) {
+  const folderId = normalizeText(id)
+  const index = await loadIndex(userId)
+  const affectedNoteIds = index.notes.filter((summary) => summary.folderId === folderId).map((summary) => summary.id)
+  const now = Date.now()
+
+  index.folders = sortFolders(
+    index.folders
+      .filter((folder) => folder.id !== folderId)
+      .map((folder) => ({
+        ...folder,
+        parentId: folder.parentId === folderId ? null : folder.parentId,
+      })),
+  )
+  index.notes = index.notes.map((summary) =>
+    summary.folderId === folderId
+      ? {
+          ...summary,
+          folderId: null,
+          updatedAt: now,
+        }
+      : summary,
+  )
+
+  await saveIndex(index, userId)
+
+  for (const noteId of affectedNoteIds) {
+    const note = await readNote(noteId, userId)
+    if (!note) continue
+    await spindle.userStorage.setJson(
+      notePath(noteId),
+      {
+        ...note,
+        folderId: null,
+        updatedAt: now,
+      },
+      { indent: 2, userId },
+    )
+  }
+
+  return index
+}
+
 async function listNotes(
   userId,
   scope = 'all',
   query = '',
   chatId,
+  folderFilter = 'all',
+  folderId,
 ) {
   const index = await loadIndex(userId)
   const normalizedQuery = query.trim().toLowerCase()
@@ -211,6 +325,8 @@ async function listNotes(
     notes = chatId ? notes.filter((note) => note.chatId === chatId) : []
   }
   if (scope === 'pinned') notes = notes.filter((note) => note.pinned)
+  if (folderFilter === 'none') notes = notes.filter((note) => !note.folderId)
+  if (folderFilter === 'folder') notes = notes.filter((note) => note.folderId === folderId)
 
   if (normalizedQuery) {
     const matches = []
@@ -350,7 +466,35 @@ spindle.onFrontendMessage(async (payload, userId) => {
   try {
     switch (payload.type) {
       case 'notes:list': {
-        const index = await listNotes(userId, payload.scope, payload.query, payload.chatId)
+        const index = await listNotes(
+          userId,
+          payload.scope,
+          payload.query,
+          payload.chatId,
+          payload.folderFilter,
+          payload.folderId,
+        )
+        sendToUser({ type: 'notes:index', index }, userId)
+        break
+      }
+
+      case 'folders:create': {
+        const index = await createFolder(payload.name, payload.parentId, userId)
+        sendToUser({ type: 'folders:saved', index }, userId)
+        sendToUser({ type: 'notes:index', index }, userId)
+        break
+      }
+
+      case 'folders:update': {
+        const index = await updateFolder(payload.folder, userId)
+        sendToUser({ type: 'folders:saved', index }, userId)
+        sendToUser({ type: 'notes:index', index }, userId)
+        break
+      }
+
+      case 'folders:delete': {
+        const index = await deleteFolder(payload.id, userId)
+        sendToUser({ type: 'folders:deleted', id: payload.id, index }, userId)
         sendToUser({ type: 'notes:index', index }, userId)
         break
       }

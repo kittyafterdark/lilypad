@@ -206,6 +206,13 @@ function formatDate(timestamp) {
   })
 }
 
+function sortFolders(folders) {
+  return [...folders].sort((a, b) => {
+    if (a.sort !== b.sort) return a.sort - b.sort
+    return a.name.localeCompare(b.name)
+  })
+}
+
 function normalizeChatContext(value) {
   if (!value || typeof value !== 'object') return null
 
@@ -326,13 +333,22 @@ export function setup(ctx) {
   let selectedNote = null
   let index = emptyIndex
   let scope = 'all'
+  let folderFilter = 'all'
+  let selectedFolderId = null
   let activeChat = { chatId: null }
   let query = ''
   let dirty = false
   let listTimer
 
   function sendListRequest() {
-    ctx.sendToBackend({ type: 'notes:list', scope, query, chatId: activeChat.chatId })
+    ctx.sendToBackend({
+      type: 'notes:list',
+      scope,
+      query,
+      chatId: activeChat.chatId,
+      folderFilter,
+      folderId: folderFilter === 'folder' ? selectedFolderId : null,
+    })
   }
 
   function queueListRequest() {
@@ -351,6 +367,89 @@ export function setup(ctx) {
     context.textContent = activeChat.chatId
       ? `This Chat: ${activeChat.chatName ?? activeChat.chatId}`
       : 'This Chat: no active chat'
+  }
+
+  function getFolderName(folderId) {
+    if (!folderId) return 'No Folder'
+    return index.folders.find((folder) => folder.id === folderId)?.name ?? 'Unknown folder'
+  }
+
+  function getSelectedFolder() {
+    if (folderFilter !== 'folder' || !selectedFolderId) return null
+    return index.folders.find((folder) => folder.id === selectedFolderId) ?? null
+  }
+
+  function selectFolder(nextFilter, folderId = null) {
+    folderFilter = nextFilter
+    selectedFolderId = nextFilter === 'folder' ? folderId : null
+    renderFolders()
+    setStatus('Loading notes...')
+    sendListRequest()
+  }
+
+  function renderFolders() {
+    const list = activeRoot?.querySelector('[data-lilypad-folder-list]')
+    if (!list) return
+
+    activeRoot?.querySelectorAll('[data-folder-filter]').forEach((button) => {
+      const filter = button.dataset.folderFilter
+      const folderId = button.dataset.folderId ?? null
+      const active =
+        filter === folderFilter &&
+        (folderFilter !== 'folder' || folderId === selectedFolderId)
+      button.classList.toggle('is-active', active)
+    })
+
+    list.innerHTML = sortFolders(index.folders)
+      .map(
+        (folder) => `
+          <button class="lp-folder ${folderFilter === 'folder' && selectedFolderId === folder.id ? 'is-active' : ''}"
+            data-folder-filter="folder"
+            data-folder-id="${escapeHtml(folder.id)}">
+            ${escapeHtml(folder.name)}
+          </button>
+        `,
+      )
+      .join('')
+
+    list.querySelectorAll('[data-folder-id]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const folderId = button.dataset.folderId
+        if (!folderId) return
+        selectFolder('folder', folderId)
+      })
+    })
+
+    const selected = getSelectedFolder()
+    const rename = activeRoot?.querySelector('[data-lilypad-folder-rename]')
+    const remove = activeRoot?.querySelector('[data-lilypad-folder-delete]')
+    if (rename) rename.disabled = !selected
+    if (remove) remove.disabled = !selected
+  }
+
+  function renderFolderOptions(selectedId) {
+    return `
+      <option value="">No Folder</option>
+      ${sortFolders(index.folders)
+        .map(
+          (folder) =>
+            `<option value="${escapeHtml(folder.id)}" ${selectedId === folder.id ? 'selected' : ''}>${escapeHtml(folder.name)}</option>`,
+        )
+        .join('')}
+    `
+  }
+
+  function refreshFolderSelect() {
+    const select = activeRoot?.querySelector('[data-lilypad-folder]')
+    if (!select) return
+
+    const current = select.value
+    select.innerHTML = renderFolderOptions(current)
+    if (current && index.folders.some((folder) => folder.id === current)) {
+      select.value = current
+    } else {
+      select.value = ''
+    }
   }
 
   function setActiveChat(chat) {
@@ -392,9 +491,10 @@ export function setup(ctx) {
       .map((note) => {
         const selected = selectedNote?.id && selectedNote.id === note.id
         const scopeText = note.scope === 'chat' ? note.chatName || 'Chat note' : 'Standalone'
+        const folderText = getFolderName(note.folderId)
         const tagText = note.tags.length
-          ? `${escapeHtml(scopeText)} · ${note.tags.map((tag) => `#${escapeHtml(tag)}`).join(' ')}`
-          : escapeHtml(scopeText)
+          ? `${escapeHtml(scopeText)} · ${escapeHtml(folderText)} · ${note.tags.map((tag) => `#${escapeHtml(tag)}`).join(' ')}`
+          : `${escapeHtml(scopeText)} · ${escapeHtml(folderText)}`
         return `
           <button class="lp-note-card ${selected ? 'is-selected' : ''}" data-note-id="${escapeHtml(note.id)}">
             <span class="lp-note-title">${escapeHtml(note.title)}</span>
@@ -422,7 +522,7 @@ export function setup(ctx) {
     const draft = selectedNote ?? createDraftNote()
     const title = activeRoot.querySelector('[data-lilypad-title]')?.value.trim() || 'Untitled note'
     const body = activeRoot.querySelector('[data-lilypad-body]')?.value ?? ''
-    const folderValue = activeRoot.querySelector('[data-lilypad-folder]')?.value.trim() || ''
+    const folderValue = activeRoot.querySelector('[data-lilypad-folder]')?.value || ''
     const tagsValue = activeRoot.querySelector('[data-lilypad-tags]')?.value ?? ''
     const scopeValue =
       activeRoot.querySelector('[data-lilypad-scope]')?.value === 'chat' ? 'chat' : 'standalone'
@@ -485,7 +585,9 @@ export function setup(ctx) {
         </label>
         <label>
           Folder
-          <input data-lilypad-folder value="${escapeHtml(note.folderId ?? '')}" placeholder="Optional" />
+          <select data-lilypad-folder>
+            ${renderFolderOptions(note.folderId)}
+          </select>
         </label>
         <label>
           Tags
@@ -567,9 +669,15 @@ export function setup(ctx) {
         .lp-pane { min-width: 0; overflow: hidden; }
         .lp-sidebar, .lp-list-pane { border-right: 1px solid var(--lumiverse-border); padding-right: 12px; }
         .lp-heading { font-weight: 700; margin-bottom: 8px; }
-        .lp-filter, .lp-note-card, .lp-primary, .lp-actions button, .lp-new { border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); border-radius: 8px; cursor: pointer; }
-        .lp-filter, .lp-new { width: 100%; padding: 8px 10px; margin-bottom: 8px; text-align: left; }
-        .lp-filter.is-active, .lp-note-card.is-selected, .lp-primary { background: var(--lumiverse-accent, var(--lumiverse-fill)); color: var(--lumiverse-accent-contrast, var(--lumiverse-text)); }
+        .lp-filter, .lp-folder, .lp-folder-action, .lp-folder-add, .lp-note-card, .lp-primary, .lp-actions button, .lp-new { border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); border-radius: 8px; cursor: pointer; }
+        .lp-filter, .lp-folder, .lp-new { width: 100%; padding: 8px 10px; margin-bottom: 8px; text-align: left; }
+        .lp-filter.is-active, .lp-folder.is-active, .lp-note-card.is-selected, .lp-primary { background: var(--lumiverse-accent, var(--lumiverse-fill)); color: var(--lumiverse-accent-contrast, var(--lumiverse-text)); }
+        .lp-section-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 14px 0 8px; font-size: 12px; color: var(--lumiverse-text-dim); }
+        .lp-folder-add { width: 28px; height: 24px; padding: 0; text-align: center; }
+        .lp-folder-list { max-height: 150px; overflow: auto; padding-right: 2px; }
+        .lp-folder-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 2px; }
+        .lp-folder-action { padding: 6px 8px; font-size: 12px; }
+        .lp-folder-action:disabled { cursor: not-allowed; opacity: .45; }
         .lp-search, .lp-title-input, .lp-meta-grid input, .lp-meta-grid select, .lp-body-label textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
         .lp-search { padding: 8px; margin-bottom: 10px; }
         .lp-note-list { height: calc(100% - 46px); overflow: auto; padding-right: 2px; }
@@ -624,6 +732,17 @@ export function setup(ctx) {
           <button class="lp-filter" data-scope="chat">This Chat</button>
           <button class="lp-filter" data-scope="standalone">Standalone</button>
           <button class="lp-filter" data-scope="pinned">Pinned</button>
+          <div class="lp-section-title">
+            <span>Folders</span>
+            <button class="lp-folder-add" data-lilypad-folder-add title="New folder">+</button>
+          </div>
+          <button class="lp-folder is-active" data-folder-filter="all">All Folders</button>
+          <button class="lp-folder" data-folder-filter="none">No Folder</button>
+          <div class="lp-folder-list" data-lilypad-folder-list></div>
+          <div class="lp-folder-actions">
+            <button class="lp-folder-action" data-lilypad-folder-rename disabled>Rename</button>
+            <button class="lp-folder-action" data-lilypad-folder-delete disabled>Delete</button>
+          </div>
           <span class="lp-chat-context" data-lilypad-chat-context>This Chat: checking...</span>
           <div class="lp-footer">
             <span class="lp-status" data-lilypad-status>Ready</span>
@@ -647,6 +766,38 @@ export function setup(ctx) {
       setStatus('New draft')
     })
 
+    activeRoot.querySelector('[data-lilypad-folder-add]')?.addEventListener('click', () => {
+      const name = window.prompt('Folder name?')?.trim()
+      if (!name) return
+      setStatus('Creating folder...')
+      ctx.sendToBackend({ type: 'folders:create', name })
+    })
+
+    activeRoot.querySelector('[data-lilypad-folder-rename]')?.addEventListener('click', () => {
+      const selected = getSelectedFolder()
+      if (!selected) return
+      const name = window.prompt('Rename folder?', selected.name)?.trim()
+      if (!name || name === selected.name) return
+      setStatus('Renaming folder...')
+      ctx.sendToBackend({ type: 'folders:update', folder: { id: selected.id, name } })
+    })
+
+    activeRoot.querySelector('[data-lilypad-folder-delete]')?.addEventListener('click', () => {
+      const selected = getSelectedFolder()
+      if (!selected) return
+      if (!window.confirm(`Delete folder "${selected.name}"? Notes inside it will be kept and moved to No Folder.`)) return
+      setStatus('Deleting folder...')
+      ctx.sendToBackend({ type: 'folders:delete', id: selected.id })
+    })
+
+    activeRoot.querySelectorAll('[data-folder-filter]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const nextFilter = button.dataset.folderFilter || 'all'
+        const folderId = button.dataset.folderId ?? null
+        selectFolder(nextFilter, folderId)
+      })
+    })
+
     activeRoot.querySelectorAll('[data-scope]').forEach((button) => {
       button.addEventListener('click', () => {
         scope = button.dataset.scope || 'all'
@@ -664,6 +815,7 @@ export function setup(ctx) {
     })
 
     renderChatContext()
+    renderFolders()
     renderEditor()
     requestActiveChat()
     sendListRequest()
@@ -748,12 +900,46 @@ export function setup(ctx) {
 
     if (payload.type === 'notes:index') {
       index = payload.index
+      if (folderFilter === 'folder' && !index.folders.some((folder) => folder.id === selectedFolderId)) {
+        folderFilter = 'all'
+        selectedFolderId = null
+      }
+      renderFolders()
+      refreshFolderSelect()
       renderList()
       if (scope === 'chat' && !activeChat.chatId) {
         setStatus('No active chat')
       } else {
         setStatus(`${index.notes.length} note${index.notes.length === 1 ? '' : 's'}`)
       }
+      return
+    }
+
+    if (payload.type === 'folders:saved') {
+      index = payload.index
+      renderFolders()
+      refreshFolderSelect()
+      renderList()
+      setStatus('Folder saved')
+      return
+    }
+
+    if (payload.type === 'folders:deleted') {
+      index = payload.index
+      if (selectedFolderId === payload.id) {
+        folderFilter = 'all'
+        selectedFolderId = null
+      }
+      if (selectedNote?.folderId === payload.id) {
+        selectedNote = {
+          ...selectedNote,
+          folderId: null,
+        }
+      }
+      renderFolders()
+      refreshFolderSelect()
+      renderList()
+      setStatus('Folder deleted')
       return
     }
 
