@@ -488,6 +488,171 @@ export function setup(ctx: any) {
     })
   }
 
+  function liveBlockText(block: HTMLElement) {
+    return (block.textContent ?? '').replace(/\u00a0/g, ' ').replace(/\n+$/g, '')
+  }
+
+  function createLiveBlock(type = 'p', text = '', options: any = {}) {
+    const block = document.createElement(type === 'code' ? 'pre' : 'div')
+    block.dataset.mdType = type
+    block.className = 'lp-live-line'
+
+    if (type === 'h') {
+      const level = Math.min(6, Math.max(1, Number(options.level) || 1))
+      block.dataset.mdLevel = String(level)
+      block.classList.add('lp-live-heading', `is-h${level}`)
+    } else if (type === 'ul' || type === 'ol') {
+      block.classList.add('lp-live-list', `is-${type}`)
+      if (type === 'ol') block.dataset.mdIndex = String(options.index ?? 1)
+    } else if (type === 'quote') {
+      block.classList.add('lp-live-quote')
+    } else if (type === 'code') {
+      block.classList.add('lp-live-code')
+      block.dataset.mdInfo = options.info ?? ''
+    }
+
+    if (text) {
+      block.textContent = text
+    } else {
+      block.innerHTML = '<br>'
+    }
+
+    return block
+  }
+
+  function replaceLiveBlock(block: HTMLElement, type = 'p', text = '', options: any = {}) {
+    const next = createLiveBlock(type, text, options)
+    block.replaceWith(next)
+    return next
+  }
+
+  function setCaretToEnd(element: HTMLElement) {
+    const range = document.createRange()
+    range.selectNodeContents(element)
+    range.collapse(false)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+  }
+
+  function getCurrentLiveBlock(root: HTMLElement) {
+    const selection = window.getSelection()
+    const anchor = selection?.anchorNode
+    if (!anchor || !root.contains(anchor)) return null
+    const element: any = anchor.nodeType === Node.ELEMENT_NODE ? anchor : anchor.parentElement
+    return element?.closest('[data-md-type]') ?? null
+  }
+
+  function updateOrderedListIndexes(root: HTMLElement) {
+    let index = 1
+    let inOrderedList = false
+    root.querySelectorAll<HTMLElement>('[data-md-type]').forEach((block) => {
+      if (block.dataset.mdType === 'ol') {
+        if (!inOrderedList) index = 1
+        block.dataset.mdIndex = String(index)
+        index += 1
+        inOrderedList = true
+      } else {
+        inOrderedList = false
+      }
+    })
+  }
+
+  function renderLiveEditorFromMarkdown(root: HTMLElement, markdown: string) {
+    root.innerHTML = ''
+    const lines = (markdown || '').split('\n')
+    let index = 0
+
+    while (index < lines.length) {
+      const line = lines[index]
+      const trimmed = line.trim()
+      const fence = trimmed.match(/^```(.*)$/)
+
+      if (fence) {
+        const info = fence[1]?.trim() ?? ''
+        const codeLines: string[] = []
+        index += 1
+        while (index < lines.length && !lines[index].trim().match(/^```\s*$/)) {
+          codeLines.push(lines[index])
+          index += 1
+        }
+        root.append(createLiveBlock('code', codeLines.join('\n'), { info }))
+      } else if (!trimmed) {
+        root.append(createLiveBlock('p'))
+      } else {
+        const heading = trimmed.match(/^(#{1,6})\s+(.+)$/)
+        const unordered = trimmed.match(/^[-*+]\s+(.+)$/)
+        const ordered = trimmed.match(/^(\d+)[.)]\s+(.+)$/)
+        const quote = trimmed.match(/^>\s+(.+)$/)
+
+        if (heading) {
+          root.append(createLiveBlock('h', heading[2], { level: heading[1].length }))
+        } else if (unordered) {
+          root.append(createLiveBlock('ul', unordered[1]))
+        } else if (ordered) {
+          root.append(createLiveBlock('ol', ordered[2], { index: ordered[1] }))
+        } else if (quote) {
+          root.append(createLiveBlock('quote', quote[1]))
+        } else {
+          root.append(createLiveBlock('p', line))
+        }
+      }
+
+      index += 1
+    }
+
+    if (!root.querySelector('[data-md-type]')) root.append(createLiveBlock('p'))
+    updateOrderedListIndexes(root)
+  }
+
+  function liveEditorToMarkdown(root: HTMLElement) {
+    const lines: string[] = []
+    root.querySelectorAll<HTMLElement>('[data-md-type]').forEach((block) => {
+      const type = block.dataset.mdType ?? 'p'
+      const text = liveBlockText(block)
+
+      if (type === 'h') {
+        const level = Math.min(6, Math.max(1, Number(block.dataset.mdLevel) || 1))
+        lines.push(`${'#'.repeat(level)} ${text}`)
+      } else if (type === 'ul') {
+        lines.push(text ? `- ${text}` : '- ')
+      } else if (type === 'ol') {
+        lines.push(`${block.dataset.mdIndex ?? '1'}. ${text}`)
+      } else if (type === 'quote') {
+        lines.push(text ? `> ${text}` : '> ')
+      } else if (type === 'code') {
+        const info = block.dataset.mdInfo ? block.dataset.mdInfo : ''
+        lines.push(`\`\`\`${info}`, text, '```')
+      } else {
+        lines.push(text)
+      }
+    })
+
+    return lines.join('\n').replace(/\n+$/g, '')
+  }
+
+  function syncLiveEditorToSource(root: HTMLElement, source: HTMLTextAreaElement) {
+    updateOrderedListIndexes(root)
+    source.value = liveEditorToMarkdown(root)
+  }
+
+  function transformLiveShortcut(block: HTMLElement) {
+    if (block.dataset.mdType !== 'p') return block
+    const text = liveBlockText(block)
+    const heading = text.match(/^(#{1,6})\s+(.*)$/)
+    const unordered = text.match(/^[-*+]\s+(.*)$/)
+    const ordered = text.match(/^(\d+)[.)]\s+(.*)$/)
+    const quote = text.match(/^>\s+(.*)$/)
+    const code = text.match(/^```(.*)$/)
+
+    if (heading) return replaceLiveBlock(block, 'h', heading[2], { level: heading[1].length })
+    if (unordered) return replaceLiveBlock(block, 'ul', unordered[1])
+    if (ordered) return replaceLiveBlock(block, 'ol', ordered[2], { index: ordered[1] })
+    if (quote) return replaceLiveBlock(block, 'quote', quote[1])
+    if (code) return replaceLiveBlock(block, 'code', '', { info: code[1]?.trim() ?? '' })
+    return block
+  }
+
   function renderChatContext() {
     const context = activeRoot?.querySelector<HTMLElement>('[data-lilypad-chat-context]')
     if (!context) return
@@ -737,17 +902,20 @@ export function setup(ctx: any) {
       </div>
 
       <div class="lp-body-grid">
-        <label class="lp-body-label">
-          <textarea data-lilypad-body>${escapeHtml(note.body)}</textarea>
-        </label>
-        <section class="lp-preview" data-lilypad-preview aria-label="Live markdown view">
-          ${renderMarkdown(note.body)}
-        </section>
+        <textarea data-lilypad-body class="lp-source-textarea" hidden>${escapeHtml(note.body)}</textarea>
+        <div
+          class="lp-live-editor"
+          data-lilypad-live-editor
+          contenteditable="true"
+          role="textbox"
+          aria-multiline="true"
+          spellcheck="true"
+        ></div>
       </div>
     `
 
     const body = editor.querySelector<HTMLTextAreaElement>('[data-lilypad-body]')
-    const preview = editor.querySelector<HTMLElement>('[data-lilypad-preview]')
+    const liveEditor = editor.querySelector<HTMLElement>('[data-lilypad-live-editor]')
     const scopeSelect = editor.querySelector<HTMLSelectElement>('[data-lilypad-scope]')
     const chatHint = editor.querySelector<HTMLElement>('[data-lilypad-chat-hint]')
     const markDirty = () => {
@@ -760,9 +928,59 @@ export function setup(ctx: any) {
       field.addEventListener('change', markDirty)
     })
 
-    body?.addEventListener('input', () => {
-      if (preview) preview.innerHTML = renderMarkdown(body.value)
-    })
+    if (liveEditor && body) {
+      renderLiveEditorFromMarkdown(liveEditor, body.value)
+
+      liveEditor.addEventListener('input', () => {
+        const block = getCurrentLiveBlock(liveEditor)
+        if (block) {
+          const transformed = transformLiveShortcut(block)
+          if (transformed !== block) setCaretToEnd(transformed)
+        }
+        syncLiveEditorToSource(liveEditor, body)
+        markDirty()
+      })
+
+      liveEditor.addEventListener('keydown', (event) => {
+        const block = getCurrentLiveBlock(liveEditor)
+        if (!block) return
+
+        if (event.key === 'Backspace' && liveBlockText(block) === '' && block.dataset.mdType !== 'p') {
+          event.preventDefault()
+          const paragraph = replaceLiveBlock(block, 'p')
+          setCaretToEnd(paragraph)
+          syncLiveEditorToSource(liveEditor, body)
+          markDirty()
+          return
+        }
+
+        if (event.key !== 'Enter' || event.shiftKey || block.dataset.mdType === 'code') return
+
+        event.preventDefault()
+        const type = block.dataset.mdType ?? 'p'
+        if (liveBlockText(block) === '' && ['h', 'ul', 'ol', 'quote'].includes(type)) {
+          const paragraph = replaceLiveBlock(block, 'p')
+          setCaretToEnd(paragraph)
+          syncLiveEditorToSource(liveEditor, body)
+          markDirty()
+          return
+        }
+
+        const nextType = type === 'ul' || type === 'ol' ? type : 'p'
+        const next = createLiveBlock(nextType)
+        block.insertAdjacentElement('afterend', next)
+        updateOrderedListIndexes(liveEditor)
+        setCaretToEnd(next)
+        syncLiveEditorToSource(liveEditor, body)
+        markDirty()
+      })
+
+      liveEditor.addEventListener('paste', (event) => {
+        event.preventDefault()
+        const text = event.clipboardData?.getData('text/plain') ?? ''
+        document.execCommand('insertText', false, text)
+      })
+    }
 
     editor.querySelector<HTMLButtonElement>('[data-lilypad-expand-body]')?.addEventListener('click', () => {
       openExpandedTextEditor(
@@ -830,7 +1048,7 @@ export function setup(ctx: any) {
         .lp-folder-action:disabled { cursor: not-allowed; opacity: .45; }
         .lp-data-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 0 0 8px; }
         .lp-data-action { border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); border-radius: 8px; cursor: pointer; padding: 7px 8px; font-size: 12px; }
-        .lp-search, .lp-title-input, .lp-meta-grid input, .lp-meta-grid select, .lp-body-label textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
+        .lp-search, .lp-title-input, .lp-meta-grid input, .lp-meta-grid select, .lp-live-editor { width: 100%; box-sizing: border-box; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
         .lp-list-tools { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 6px; margin-bottom: 10px; }
         .lp-search { padding: 8px; }
         .lp-list-toggle { padding: 0; font-size: 18px; line-height: 1; }
@@ -853,7 +1071,7 @@ export function setup(ctx: any) {
         .lp-actions { display: flex; gap: 8px; }
         .lp-actions button { padding: 8px 10px; }
         .lp-meta-grid { display: grid; grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1.2fr) 82px; gap: 8px; align-items: start; }
-        .lp-meta-grid label, .lp-body-label { color: var(--lumiverse-text-dim); font-size: 12px; }
+        .lp-meta-grid label { color: var(--lumiverse-text-dim); font-size: 12px; }
         .lp-meta-grid input, .lp-meta-grid select { display: block; margin-top: 4px; padding: 7px 8px; }
         .lp-field-hint { display: block; min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .lp-note-context { min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -862,9 +1080,25 @@ export function setup(ctx: any) {
         .lp-markdown-actions { display: flex; align-items: center; gap: 6px; }
         .lp-expand-text { padding: 4px 7px; font-size: 12px; background: transparent; color: var(--lumiverse-text-dim); }
         .lp-expand-text:hover { color: var(--lumiverse-text); }
-        .lp-body-grid { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, .86fr); gap: 10px; }
-        .lp-body-label { min-height: 0; display: flex; flex-direction: column; gap: 4px; }
-        .lp-body-label textarea { flex: 1; resize: none; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.45; }
+        .lp-body-grid { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); }
+        .lp-source-textarea { display: none; }
+        .lp-live-editor { min-height: 0; overflow: auto; padding: 14px; outline: none; line-height: 1.5; }
+        .lp-live-editor:focus { border-color: var(--lumiverse-accent, var(--lumiverse-border)); }
+        .lp-live-editor:empty::before { content: "Start writing..."; color: var(--lumiverse-text-dim); }
+        .lp-live-line { min-height: 1.45em; margin: 0 0 6px; white-space: pre-wrap; word-break: break-word; }
+        .lp-live-line:last-child { margin-bottom: 0; }
+        .lp-live-heading { color: var(--lumiverse-text); font-weight: 800; line-height: 1.15; }
+        .lp-live-heading.is-h1 { font-size: 28px; margin: 0 0 10px; }
+        .lp-live-heading.is-h2 { font-size: 22px; margin: 0 0 9px; }
+        .lp-live-heading.is-h3 { font-size: 18px; margin: 0 0 8px; }
+        .lp-live-heading.is-h4, .lp-live-heading.is-h5, .lp-live-heading.is-h6 { font-size: 15px; margin: 0 0 7px; }
+        .lp-live-list { position: relative; padding-left: 24px; }
+        .lp-live-list::before { position: absolute; left: 4px; color: var(--lumiverse-text-dim); }
+        .lp-live-list.is-ul::before { content: "•"; }
+        .lp-live-list.is-ol::before { content: attr(data-md-index) "."; }
+        .lp-live-quote { padding-left: 12px; border-left: 3px solid var(--lumiverse-border); color: var(--lumiverse-text-dim); }
+        .lp-live-code { margin: 0 0 10px; padding: 10px; overflow: auto; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill); color: var(--lumiverse-text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.45; white-space: pre-wrap; }
+        .lp-live-code[data-md-info]:not([data-md-info=""])::before { content: attr(data-md-info); display: block; margin: -10px -10px 8px; padding: 6px 10px; border-bottom: 1px solid var(--lumiverse-border); color: var(--lumiverse-text-dim); font-size: 12px; }
         .lp-preview { min-height: 0; overflow: auto; padding: 12px; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: transparent; line-height: 1.45; }
         .lp-preview:empty::before { content: "No markdown yet."; color: var(--lumiverse-text-dim); }
         .lp-preview h1, .lp-preview h2, .lp-preview h3, .lp-preview h4, .lp-preview h5, .lp-preview h6 { margin: 0 0 8px; }
@@ -895,7 +1129,7 @@ export function setup(ctx: any) {
           .lp-check { margin-top: 0; }
           .lp-actions { justify-content: stretch; }
           .lp-actions button { flex: 1; }
-          .lp-body-label textarea { min-height: 220px; }
+          .lp-live-editor { min-height: 220px; }
         }
       </style>
       <div class="lp-shell" data-lilypad-open-source="${source}">
@@ -1133,10 +1367,10 @@ export function setup(ctx: any) {
 
       if (target === 'body') {
         const body = activeRoot?.querySelector<HTMLTextAreaElement>('[data-lilypad-body]')
-        const preview = activeRoot?.querySelector<HTMLElement>('[data-lilypad-preview]')
+        const liveEditor = activeRoot?.querySelector<HTMLElement>('[data-lilypad-live-editor]')
         if (body) {
           body.value = payload.text
-          if (preview) preview.innerHTML = renderMarkdown(payload.text)
+          if (liveEditor) renderLiveEditorFromMarkdown(liveEditor, payload.text)
           dirty = true
           setStatus('Unsaved changes')
         }
