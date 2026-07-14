@@ -430,6 +430,7 @@ export function setup(ctx: any) {
   let folderFilter: FolderFilter = 'all'
   let selectedFolderId: string | null = null
   let activeChat: ChatContext = { chatId: null }
+  let markdownMode: 'write' | 'preview' | 'split' = 'write'
   let query = ''
   let dirty = false
   let listTimer: number | undefined
@@ -693,9 +694,17 @@ export function setup(ctx: any) {
         </label>
       </div>
 
-      <div class="lp-body-grid">
+      <div class="lp-markdown-head">
+        <span>Markdown</span>
+        <div class="lp-mode-tabs" role="group" aria-label="Markdown view mode">
+          <button class="${markdownMode === 'write' ? 'is-active' : ''}" data-markdown-mode="write">Write</button>
+          <button class="${markdownMode === 'preview' ? 'is-active' : ''}" data-markdown-mode="preview">Preview</button>
+          <button class="${markdownMode === 'split' ? 'is-active' : ''}" data-markdown-mode="split">Split</button>
+        </div>
+      </div>
+
+      <div class="lp-body-grid is-${markdownMode}">
         <label class="lp-body-label">
-          Markdown
           <textarea data-lilypad-body>${escapeHtml(note.body)}</textarea>
         </label>
         <section class="lp-preview" data-lilypad-preview aria-label="Markdown preview">
@@ -706,6 +715,7 @@ export function setup(ctx: any) {
 
     const body = editor.querySelector<HTMLTextAreaElement>('[data-lilypad-body]')
     const preview = editor.querySelector<HTMLElement>('[data-lilypad-preview]')
+    const bodyGrid = editor.querySelector<HTMLElement>('.lp-body-grid')
     const scopeSelect = editor.querySelector<HTMLSelectElement>('[data-lilypad-scope]')
     const chatHint = editor.querySelector<HTMLElement>('[data-lilypad-chat-hint]')
     const markDirty = () => {
@@ -720,6 +730,19 @@ export function setup(ctx: any) {
 
     body?.addEventListener('input', () => {
       if (preview) preview.innerHTML = renderMarkdown(body.value)
+    })
+
+    editor.querySelectorAll<HTMLButtonElement>('[data-markdown-mode]').forEach((button) => {
+      button.addEventListener('click', () => {
+        markdownMode = (button.dataset.markdownMode as 'write' | 'preview' | 'split') ?? 'write'
+        editor.querySelectorAll('[data-markdown-mode]').forEach((item) => item.classList.remove('is-active'))
+        button.classList.add('is-active')
+        if (bodyGrid) {
+          bodyGrid.classList.remove('is-write', 'is-preview', 'is-split')
+          bodyGrid.classList.add(`is-${markdownMode}`)
+        }
+        if (preview && body) preview.innerHTML = renderMarkdown(body.value)
+      })
     })
 
     scopeSelect?.addEventListener('change', () => {
@@ -764,15 +787,18 @@ export function setup(ctx: any) {
         .lp-sidebar, .lp-list-pane { border-right: 1px solid var(--lumiverse-border); padding-right: 12px; }
         .lp-heading { font-weight: 700; margin-bottom: 8px; }
         .lp-filter, .lp-folder, .lp-folder-action, .lp-folder-add, .lp-note-card, .lp-primary, .lp-actions button, .lp-new { border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); border-radius: 8px; cursor: pointer; }
-        .lp-filter, .lp-folder, .lp-new { width: 100%; padding: 8px 10px; margin-bottom: 8px; text-align: left; }
+        .lp-new { width: 100%; padding: 8px 10px; margin-bottom: 10px; text-align: left; }
+        .lp-filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px; }
+        .lp-filter { padding: 6px 7px; text-align: center; font-size: 12px; }
+        .lp-folder { width: 100%; padding: 7px 9px; margin-bottom: 6px; text-align: left; }
         .lp-filter.is-active, .lp-folder.is-active, .lp-note-card.is-selected, .lp-primary { background: var(--lumiverse-accent, var(--lumiverse-fill)); color: var(--lumiverse-accent-contrast, var(--lumiverse-text)); }
-        .lp-section-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 14px 0 8px; font-size: 12px; color: var(--lumiverse-text-dim); }
+        .lp-section-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0 8px; font-size: 12px; color: var(--lumiverse-text-dim); }
         .lp-folder-add { width: 28px; height: 24px; padding: 0; text-align: center; }
-        .lp-folder-list { max-height: 150px; overflow: auto; padding-right: 2px; }
+        .lp-folder-list { max-height: 118px; overflow: auto; padding-right: 2px; }
         .lp-folder-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 2px; }
         .lp-folder-action { padding: 6px 8px; font-size: 12px; }
         .lp-folder-action:disabled { cursor: not-allowed; opacity: .45; }
-        .lp-data-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 12px 0 8px; }
+        .lp-data-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 0 0 8px; }
         .lp-data-action { border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); border-radius: 8px; cursor: pointer; padding: 7px 8px; font-size: 12px; }
         .lp-search, .lp-title-input, .lp-meta-grid input, .lp-meta-grid select, .lp-body-label textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
         .lp-search { padding: 8px; margin-bottom: 10px; }
@@ -794,10 +820,18 @@ export function setup(ctx: any) {
         .lp-meta-grid input, .lp-meta-grid select { display: block; margin-top: 4px; padding: 7px 8px; }
         .lp-field-hint { display: block; min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .lp-check { display: flex; align-items: center; gap: 6px; min-height: 34px; }
-        .lp-body-grid { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, .86fr); gap: 10px; }
+        .lp-markdown-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--lumiverse-text-dim); font-size: 12px; }
+        .lp-mode-tabs { display: inline-grid; grid-template-columns: repeat(3, auto); gap: 4px; }
+        .lp-mode-tabs button { border: 1px solid var(--lumiverse-border); background: transparent; color: var(--lumiverse-text-dim); border-radius: 7px; cursor: pointer; padding: 4px 7px; font-size: 12px; }
+        .lp-mode-tabs button.is-active { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
+        .lp-body-grid { min-height: 0; flex: 1; display: grid; gap: 10px; }
+        .lp-body-grid.is-write, .lp-body-grid.is-preview { grid-template-columns: minmax(0, 1fr); }
+        .lp-body-grid.is-split { grid-template-columns: minmax(0, 1fr) minmax(240px, .86fr); }
+        .lp-body-grid.is-write .lp-preview { display: none; }
+        .lp-body-grid.is-preview .lp-body-label { display: none; }
         .lp-body-label { min-height: 0; display: flex; flex-direction: column; gap: 4px; }
         .lp-body-label textarea { flex: 1; resize: none; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.45; }
-        .lp-preview { min-height: 0; overflow: auto; padding: 12px; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill-subtle); line-height: 1.45; }
+        .lp-preview { min-height: 0; overflow: auto; padding: 12px; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: transparent; line-height: 1.45; }
         .lp-preview h1, .lp-preview h2, .lp-preview h3, .lp-preview h4, .lp-preview h5, .lp-preview h6 { margin: 0 0 8px; }
         .lp-preview p { margin: 0 0 8px; }
         .lp-preview ul, .lp-preview ol { margin: 0 0 10px 18px; padding: 0; }
@@ -824,10 +858,13 @@ export function setup(ctx: any) {
         <aside class="lp-pane lp-sidebar">
           <div class="lp-heading">Lilypad</div>
           <button class="lp-new" data-lilypad-new>+ New Note</button>
-          <button class="lp-filter is-active" data-scope="all">All</button>
-          <button class="lp-filter" data-scope="chat">This Chat</button>
-          <button class="lp-filter" data-scope="standalone">Standalone</button>
-          <button class="lp-filter" data-scope="pinned">Pinned</button>
+          <div class="lp-section-title"><span>View</span></div>
+          <div class="lp-filter-grid">
+            <button class="lp-filter is-active" data-scope="all">All</button>
+            <button class="lp-filter" data-scope="chat">Chat</button>
+            <button class="lp-filter" data-scope="standalone">Global</button>
+            <button class="lp-filter" data-scope="pinned">Pinned</button>
+          </div>
           <div class="lp-section-title">
             <span>Folders</span>
             <button class="lp-folder-add" data-lilypad-folder-add title="New folder">+</button>
@@ -839,9 +876,10 @@ export function setup(ctx: any) {
             <button class="lp-folder-action" data-lilypad-folder-rename disabled>Rename</button>
             <button class="lp-folder-action" data-lilypad-folder-delete disabled>Delete</button>
           </div>
+          <div class="lp-section-title"><span>Library Backup</span></div>
           <div class="lp-data-actions">
-            <button class="lp-data-action" data-lilypad-export>Export</button>
-            <button class="lp-data-action" data-lilypad-import>Import</button>
+            <button class="lp-data-action" data-lilypad-export>Export JSON</button>
+            <button class="lp-data-action" data-lilypad-import>Import JSON</button>
           </div>
           <input data-lilypad-import-file type="file" accept="application/json,.json" hidden />
           <span class="lp-chat-context" data-lilypad-chat-context>This Chat: checking...</span>
