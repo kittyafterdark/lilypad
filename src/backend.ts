@@ -68,6 +68,13 @@ type FrontendMessage =
   | { type: 'folders:delete'; id: string }
   | { type: 'export:all' }
   | { type: 'import:all'; payload: NotesExport }
+  | {
+      type: 'editor:open'
+      requestId: string
+      title?: string
+      value?: string
+      placeholder?: string
+    }
   | { type: 'context:getActiveChat'; clientChat?: { chatId: string | null; chatName?: string } }
 
 const OPEN_LILYPAD_COMMAND = 'lilypad-open-notes'
@@ -698,6 +705,25 @@ spindle.onFrontendMessage(async (payload: FrontendMessage, userId?: string) => {
         const { index, imported } = await importAll(payload.payload, userId)
         sendToUser({ type: 'import:complete', imported, index }, userId)
         sendToUser({ type: 'notes:index', index }, userId)
+        break
+      }
+
+      case 'editor:open': {
+        const result = await spindle.textEditor.open({
+          title: normalizeText(payload.title, 'Edit Text'),
+          value: typeof payload.value === 'string' ? payload.value : '',
+          placeholder: typeof payload.placeholder === 'string' ? payload.placeholder : '',
+          userId,
+        })
+        sendToUser(
+          {
+            type: 'editor:result',
+            requestId: payload.requestId,
+            text: result.text,
+            cancelled: Boolean(result.cancelled),
+          },
+          userId,
+        )
         break
       }
 
